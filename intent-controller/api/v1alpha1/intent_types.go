@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -35,12 +36,9 @@ type IntentPolicy struct {
 
 // IntentSpec defines the desired state of Intent
 type IntentSpec struct {
-	// Agent specifies the name of the agent to use.
-	Agent string `json:"agent"`
-
-	// ReviewAgent specifies the name of the agent to use for review.
+	// Skills references ConfigMaps containing the agent's tools/instructions.
 	// +optional
-	ReviewAgent string `json:"reviewAgent,omitempty"`
+	Skills []corev1.LocalObjectReference `json:"skills,omitempty"`
 
 	// Prompt contains the human-authored intent.
 	Prompt string `json:"prompt"`

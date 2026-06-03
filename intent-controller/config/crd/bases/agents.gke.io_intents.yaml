@@ -39,9 +39,6 @@ spec:
           spec:
             description: spec defines the desired state of Intent
             properties:
-              agent:
-                description: Agent specifies the name of the agent to use.
-                type: string
               policy:
                 description: Policy defines the permission bounds for the agent.
                 properties:
@@ -153,10 +150,25 @@ spec:
               prompt:
                 description: Prompt contains the human-authored intent.
                 type: string
-              reviewAgent:
-                description: ReviewAgent specifies the name of the agent to use for
-                  review.
-                type: string
+              skills:
+                description: Skills references ConfigMaps containing the agent's tools/instructions.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
               userInfo:
                 description: UserInfo contains information about the user who created
                   the Intent.
@@ -187,7 +199,6 @@ spec:
                     type: string
                 type: object
             required:
-            - agent
             - prompt
             type: object
           status:
