@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -100,8 +101,14 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	loadSkillTool, err := k8stools.NewLoadSkillTool(r.Client, intent.Namespace, intent.Spec.Skills)
+	if err != nil {
+		logger.Error(err, "Failed to create load_skill tool")
+		return ctrl.Result{}, err
+	}
+
 	// Fetch ConfigMaps referenced in intent.Spec.Skills
-	// and inject them into the agent's instructions.
+	// and inject their frontmatter summaries into the agent's instructions.
 	var skillsInstruction string
 	for _, skillRef := range intent.Spec.Skills {
 		var cm corev1.ConfigMap
@@ -110,14 +117,24 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// Requeue if a referenced skill ConfigMap is missing
 			return ctrl.Result{}, err
 		}
-		for key, val := range cm.Data {
-			skillsInstruction += fmt.Sprintf("\n--- Skill: %s ---\n%s\n", key, val)
+		
+		// Attempt to extract frontmatter from SKILL.md or fallback to configmap name
+		name := skillRef.Name
+		desc := "Use load_skill to view."
+		
+		for _, val := range cm.Data {
+			if n, d := parseFrontmatter(val); n != "" {
+				name = n
+				desc = d
+				break
+			}
 		}
+		skillsInstruction += fmt.Sprintf("- **%s**: %s (use `load_skill` to read full instructions)\n", name, desc)
 	}
 
 	baseInstruction := "Your goal is to fulfill the user's prompt by managing Kubernetes resources. You must use the provided tools to interact with the cluster."
 	if skillsInstruction != "" {
-		baseInstruction += "\n\nHere are some skills and instructions you can use:\n" + skillsInstruction
+		baseInstruction += "\n\nAvailable Skills:\n" + skillsInstruction
 	}
 
 	// Answer(AI): It is usually better to keep the `Instruction` as the "System Prompt" (setting the rules and identity),
@@ -133,6 +150,7 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			listTool,
 			applyTool,
 			deleteTool,
+			loadSkillTool,
 		},
 	})
 	if err != nil {
@@ -160,4 +178,20 @@ func (r *IntentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&agentsv1alpha1.Intent{}).
 		Named("intent").
 		Complete(r)
+}
+
+func parseFrontmatter(content string) (string, string) {
+	name, desc := "", ""
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) >= 3 {
+		lines := strings.Split(parts[1], "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "name:") {
+				name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+			} else if strings.HasPrefix(line, "description:") {
+				desc = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+			}
+		}
+	}
+	return name, desc
 }
