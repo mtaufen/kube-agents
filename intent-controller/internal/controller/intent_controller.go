@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -98,6 +100,26 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	// Fetch ConfigMaps referenced in intent.Spec.Skills
+	// and inject them into the agent's instructions.
+	var skillsInstruction string
+	for _, skillRef := range intent.Spec.Skills {
+		var cm corev1.ConfigMap
+		if err := r.Get(ctx, client.ObjectKey{Namespace: intent.Namespace, Name: skillRef.Name}, &cm); err != nil {
+			logger.Error(err, "unable to fetch skill ConfigMap", "ConfigMap", skillRef.Name)
+			// Requeue if a referenced skill ConfigMap is missing
+			return ctrl.Result{}, err
+		}
+		for key, val := range cm.Data {
+			skillsInstruction += fmt.Sprintf("\n--- Skill: %s ---\n%s\n", key, val)
+		}
+	}
+
+	baseInstruction := "Your goal is to fulfill the user's prompt by managing Kubernetes resources. You must use the provided tools to interact with the cluster."
+	if skillsInstruction != "" {
+		baseInstruction += "\n\nHere are some skills and instructions you can use:\n" + skillsInstruction
+	}
+
 	// Answer(AI): It is usually better to keep the `Instruction` as the "System Prompt" (setting the rules and identity),
 	// and pass the `intent.Spec.Prompt` as the "User Prompt" when calling `agent.Run()`.
 	// Initialize the adk-go agent
@@ -105,7 +127,7 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		Name: "intent_agent",
 		// Model:       model,
 		Description: "An agent that actuates Kubernetes resources based on user Intent.",
-		Instruction: "Your goal is to fulfill the user's prompt by managing Kubernetes resources. You must use the provided tools to interact with the cluster.",
+		Instruction: baseInstruction,
 		Tools: []tool.Tool{
 			getTool,
 			listTool,
@@ -120,9 +142,6 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Just to prevent unused variable error while scaffolding
 	_ = agent
-
-	// TODO(Phase 1): Fetch ConfigMaps referenced in intent.Spec.Skills
-	// and inject them into the agent's instructions or tools.
 
 	// TODO(Phase 1): Run the agent
 	// res, err := agent.Run(ctx, intent.Spec.Prompt)
