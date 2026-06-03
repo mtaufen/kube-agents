@@ -25,8 +25,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/tool"
 
 	agentsv1alpha1 "kube-agents/intent-controller/api/v1alpha1"
+	k8stools "kube-agents/intent-controller/internal/tools/k8s"
 )
 
 // IntentReconciler reconciles a Intent object
@@ -69,6 +71,33 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// TODO(Phase 1): Setup model (e.g., Gemini) for the agent.
 	// model, err := gemini.NewModel(...)
 
+	// TODO(user): We currently provide specific tools (get, list, apply, delete) to improve
+	// LLM function-calling reliability via strict JSON schemas. Consider adding or migrating to a generic
+	// `call_kubernetes_api` tool if we need the LLM to access subresources (like /scale),
+	// logs, or arbitrary endpoints, trading strict schemas for maximum flexibility.
+	
+	// Instantiate the k8s tools bounded by the static Intent Policy Limits
+	getTool, err := k8stools.NewGetTool(r.Client, intent.Spec.Policy.Limits)
+	if err != nil {
+		logger.Error(err, "Failed to create get_resource tool")
+		return ctrl.Result{}, err
+	}
+	listTool, err := k8stools.NewListTool(r.Client, intent.Spec.Policy.Limits)
+	if err != nil {
+		logger.Error(err, "Failed to create list_resources tool")
+		return ctrl.Result{}, err
+	}
+	applyTool, err := k8stools.NewApplyTool(r.Client, intent.Spec.Policy.Limits)
+	if err != nil {
+		logger.Error(err, "Failed to create apply_resource tool")
+		return ctrl.Result{}, err
+	}
+	deleteTool, err := k8stools.NewDeleteTool(r.Client, intent.Spec.Policy.Limits)
+	if err != nil {
+		logger.Error(err, "Failed to create delete_resource tool")
+		return ctrl.Result{}, err
+	}
+
 	// Answer(AI): It is usually better to keep the `Instruction` as the "System Prompt" (setting the rules and identity),
 	// and pass the `intent.Spec.Prompt` as the "User Prompt" when calling `agent.Run()`.
 	// Initialize the adk-go agent
@@ -76,8 +105,13 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		Name: "intent_agent",
 		// Model:       model,
 		Description: "An agent that actuates Kubernetes resources based on user Intent.",
-		Instruction: "Your goal is to fulfill the user's prompt by managing Kubernetes resources.",
-		// Tools: []tool.Tool{ ... }, // TODO(Phase 1): Add client-go tools here
+		Instruction: "Your goal is to fulfill the user's prompt by managing Kubernetes resources. You must use the provided tools to interact with the cluster.",
+		Tools: []tool.Tool{
+			getTool,
+			listTool,
+			applyTool,
+			deleteTool,
+		},
 	})
 	if err != nil {
 		logger.Error(err, "Failed to create agent")
