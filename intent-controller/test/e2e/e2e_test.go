@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -91,6 +92,10 @@ var _ = Describe("Manager", Ordered, func() {
 
 		By("removing manager namespace")
 		cmd = exec.Command("kubectl", "delete", "ns", namespace)
+		_, _ = utils.Run(cmd)
+
+		By("removing metrics clusterrolebinding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 	})
 
@@ -175,10 +180,10 @@ var _ = Describe("Manager", Ordered, func() {
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=intent-controller-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
+			cmd := exec.Command("sh", "-c", fmt.Sprintf(
+				"kubectl create clusterrolebinding %s --clusterrole=intent-controller-metrics-reader --serviceaccount=%s:%s --dry-run=client -o yaml | kubectl apply -f -",
+				metricsRoleBindingName, namespace, serviceAccountName,
+			))
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
@@ -342,17 +347,100 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyCAInjection).Should(Succeed())
 		})
 
-		// +kubebuilder:scaffold:e2e-webhooks-checks
+		It("should validate Intent creation based on user permissions via Webhook", func() {
+			By("creating a valid Intent as cluster-admin (should succeed)")
+			validIntent := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: admin-intent
+  namespace: intent-controller-system
+spec:
+  prompt: "Create an nginx deployment"
+  policy:
+    limits:
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["create"]
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(validIntent)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Cluster-admin should be allowed to create the Intent")
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+			By("verifying the Intent was created successfully")
+			cmd = exec.Command("kubectl", "get", "intent", "admin-intent", "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "The admin-intent should exist")
+
+			By("creating a restricted ServiceAccount that can only create Intents")
+			cmd = exec.Command("kubectl", "create", "sa", "restricted-user", "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create restricted ServiceAccount")
+
+			role := `
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: restricted-user-role
+  namespace: intent-controller-system
+rules:
+- apiGroups: ["agents.gke.io"]
+  resources: ["intents"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+`
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(role)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create Role")
+
+			roleBinding := `
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: restricted-user-rolebinding
+  namespace: intent-controller-system
+subjects:
+- kind: ServiceAccount
+  name: restricted-user
+  namespace: intent-controller-system
+roleRef:
+  kind: Role
+  name: restricted-user-role
+  apiGroup: rbac.authorization.k8s.io
+`
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(roleBinding)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create RoleBinding")
+
+			By("attempting to create an Intent impersonating the restricted ServiceAccount (should fail)")
+			invalidIntent := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: restricted-intent
+  namespace: intent-controller-system
+spec:
+  prompt: "Create an nginx deployment"
+  policy:
+    limits:
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["create"]
+`
+			cmd = exec.Command("kubectl", "create", "--as=system:serviceaccount:intent-controller-system:restricted-user", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(invalidIntent)
+			output, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "Restricted user should NOT be allowed to create the Intent")
+			Expect(output).To(ContainSubstring("denied the request"), "Webhook should reject due to insufficient permissions")
+			Expect(output).To(ContainSubstring("does not have permission to create deployments.apps"), "Webhook should mention permission denial")
+
+			By("verifying the restricted Intent was not created")
+			cmd = exec.Command("kubectl", "get", "intent", "restricted-intent", "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "The restricted-intent should not exist")
+		})
 	})
 })
 
