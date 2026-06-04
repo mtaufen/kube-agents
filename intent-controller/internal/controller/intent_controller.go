@@ -19,16 +19,25 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/model/gemini"
+	"google.golang.org/adk/runner"
+	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
+	"google.golang.org/genai"
 
 	agentsv1alpha1 "kube-agents/intent-controller/api/v1alpha1"
 	k8stools "kube-agents/intent-controller/internal/tools/k8s"
@@ -71,8 +80,18 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// TODO(Phase 2): Compile AdaptivePolicy using an LLM based on intent.Spec.Prompt.
 	// For Phase 1, we will just use intent.Spec.Policy.Limits directly in our tools.
 
-	// TODO(Phase 1): Setup model (e.g., Gemini) for the agent.
-	// model, err := gemini.NewModel(...)
+	// Setup model (e.g., Gemini) for the agent.
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("GOOGLE_API_KEY")
+	}
+	model, err := gemini.NewModel(ctx, "gemini-3.1-flash-lite", &genai.ClientConfig{
+		APIKey: apiKey,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to create gemini model")
+		return ctrl.Result{}, err
+	}
 
 	// TODO(user): We currently provide specific tools (get, list, apply, delete) to improve
 	// LLM function-calling reliability via strict JSON schemas. Consider adding or migrating to a generic
@@ -140,9 +159,9 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Answer(AI): It is usually better to keep the `Instruction` as the "System Prompt" (setting the rules and identity),
 	// and pass the `intent.Spec.Prompt` as the "User Prompt" when calling `agent.Run()`.
 	// Initialize the adk-go agent
-	agent, err := llmagent.New(llmagent.Config{
-		Name: "intent_agent",
-		// Model:       model,
+	adkAgent, err := llmagent.New(llmagent.Config{
+		Name:        "intent_agent",
+		Model:       model,
 		Description: "An agent that actuates Kubernetes resources based on user Intent.",
 		Instruction: baseInstruction,
 		Tools: []tool.Tool{
@@ -158,13 +177,64 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Just to prevent unused variable error while scaffolding
-	_ = agent
+	// Run the agent
+	rnr, err := runner.New(runner.Config{
+		Agent:          adkAgent,
+		SessionService: session.InMemoryService(),
+	})
+	if err != nil {
+		logger.Error(err, "Failed to create runner")
+		return ctrl.Result{}, err
+	}
 
-	// TODO(Phase 1): Run the agent
-	// res, err := agent.Run(ctx, intent.Spec.Prompt)
+	meta.SetStatusCondition(&intent.Status.Conditions, metav1.Condition{
+		Type:    "Progressing",
+		Status:  metav1.ConditionTrue,
+		Reason:  "AgentRunning",
+		Message: "The agent is actively evaluating and actuating the intent",
+	})
+	if err := r.Status().Update(ctx, &intent); err != nil {
+		logger.Error(err, "Failed to update Intent status")
+		return ctrl.Result{}, err
+	}
 
-	return ctrl.Result{}, nil
+	msg := &genai.Content{
+		Parts: []*genai.Part{{Text: intent.Spec.Prompt}},
+	}
+	res := rnr.Run(ctx, intent.Namespace, intent.Name, msg, agent.RunConfig{})
+	for event, err := range res {
+		if err != nil {
+			logger.Error(err, "Agent run encountered an error")
+			meta.SetStatusCondition(&intent.Status.Conditions, metav1.Condition{
+				Type:    "Degraded",
+				Status:  metav1.ConditionTrue,
+				Reason:  "AgentError",
+				Message: fmt.Sprintf("Agent run failed: %v", err),
+			})
+			_ = r.Status().Update(ctx, &intent)
+			return ctrl.Result{}, err
+		}
+		// In a production scenario, we could log or store intermediate events
+		_ = event
+	}
+
+	meta.SetStatusCondition(&intent.Status.Conditions, metav1.Condition{
+		Type:    "Available",
+		Status:  metav1.ConditionTrue,
+		Reason:  "AgentSucceeded",
+		Message: "The agent has completed its execution successfully",
+	})
+	meta.RemoveStatusCondition(&intent.Status.Conditions, "Progressing")
+	meta.RemoveStatusCondition(&intent.Status.Conditions, "Degraded")
+	if err := r.Status().Update(ctx, &intent); err != nil {
+		logger.Error(err, "Failed to update Intent status")
+		return ctrl.Result{}, err
+	}
+
+	// We return a small RequeueAfter to allow the agent to continuously poll/manage
+	// the resources, acting as a control loop. (In Phase 4, we'll replace this with
+	// dynamic watches).
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 // Answer(AI): `SetupWithManager` runs once at startup, so it's not the right place for per-Intent dynamic watches.
