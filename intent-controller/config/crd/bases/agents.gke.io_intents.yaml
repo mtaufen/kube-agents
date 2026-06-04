@@ -387,6 +387,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              policyHash:
+                description: |-
+                  PolicyHash stores the hash of the Spec inputs used to generate the AdaptivePolicy.
+                  Used to bypass recompilation when the Spec has not changed.
+                type: string
             type: object
         required:
         - spec

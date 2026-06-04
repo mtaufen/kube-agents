@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,6 +15,21 @@ import (
 
 	k8stools "kube-agents/intent-controller/internal/tools/k8s"
 )
+
+// computePolicyHash generates a deterministic hash of the inputs that dictate the AdaptivePolicy.
+func computePolicyHash(prompt string, required, limits []rbacv1.PolicyRule) string {
+	hashData := struct {
+		Prompt   string              `json:"prompt"`
+		Required []rbacv1.PolicyRule `json:"required"`
+		Limits   []rbacv1.PolicyRule `json:"limits"`
+	}{
+		Prompt:   prompt,
+		Required: required,
+		Limits:   limits,
+	}
+	b, _ := json.Marshal(hashData)
+	return fmt.Sprintf("%x", sha256.Sum256(b))
+}
 
 // compileAdaptivePolicy calls an LLM to generate an AdaptivePolicy (list of PolicyRules)
 // bounded by the required and limits policies.

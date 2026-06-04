@@ -24,6 +24,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -94,20 +95,29 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Phase 2: Compile AdaptivePolicy using an LLM based on intent.Spec.Prompt.
-	adaptivePolicyRules, err := compileAdaptivePolicy(ctx, apiKey, modelName, intent.Spec.Prompt, intent.Spec.Policy.Required, intent.Spec.Policy.Limits)
-	if err != nil {
-		logger.Error(err, "Failed to compile adaptive policy, falling back to limits")
-		// Fallback to limits if compilation fails, or we could fail entirely. We'll fallback to limits for safety.
-		adaptivePolicyRules = intent.Spec.Policy.Limits
+	currentHash := computePolicyHash(intent.Spec.Prompt, intent.Spec.Policy.Required, intent.Spec.Policy.Limits)
+
+	var adaptivePolicyRules []rbacv1.PolicyRule
+	if intent.Status.PolicyHash == currentHash && len(intent.Status.AdaptivePolicy.Limits) > 0 {
+		logger.Info("Bypassing policy compilation (inputs unchanged)")
+		adaptivePolicyRules = intent.Status.AdaptivePolicy.Limits
 	} else {
-		if err := verifyPolicy(ctx, r.Client, intent.Spec.UserInfo, intent.Namespace, adaptivePolicyRules, intent.Spec.Policy.Required, intent.Spec.Policy.Limits); err != nil {
-			logger.Error(err, "Adaptive policy verification failed, falling back to limits")
+		// Phase 2: Compile AdaptivePolicy using an LLM based on intent.Spec.Prompt.
+		compiledRules, err := compileAdaptivePolicy(ctx, apiKey, modelName, intent.Spec.Prompt, intent.Spec.Policy.Required, intent.Spec.Policy.Limits)
+		if err != nil {
+			logger.Error(err, "Failed to compile adaptive policy, falling back to limits")
+			// Fallback to limits if compilation fails
 			adaptivePolicyRules = intent.Spec.Policy.Limits
 		} else {
-			// Verification passed, update Status to reflect the active policy
-			intent.Status.AdaptivePolicy.Limits = adaptivePolicyRules
-			// Note: Status updates to intent happen later down in the file
+			if err := verifyPolicy(ctx, r.Client, intent.Spec.UserInfo, intent.Namespace, compiledRules, intent.Spec.Policy.Required, intent.Spec.Policy.Limits); err != nil {
+				logger.Error(err, "Adaptive policy verification failed, falling back to limits")
+				adaptivePolicyRules = intent.Spec.Policy.Limits
+			} else {
+				// Verification passed, update Status to reflect the active policy and hash
+				adaptivePolicyRules = compiledRules
+				intent.Status.AdaptivePolicy.Limits = adaptivePolicyRules
+				intent.Status.PolicyHash = currentHash
+			}
 		}
 	}
 

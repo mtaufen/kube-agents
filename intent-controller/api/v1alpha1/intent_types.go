@@ -63,6 +63,11 @@ type IntentStatus struct {
 	// +optional
 	AdaptivePolicy IntentPolicy `json:"adaptivePolicy,omitempty"`
 
+	// PolicyHash stores the hash of the Spec inputs used to generate the AdaptivePolicy.
+	// Used to bypass recompilation when the Spec has not changed.
+	// +optional
+	PolicyHash string `json:"policyHash,omitempty"`
+
 	// conditions represent the current state of the Intent resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
