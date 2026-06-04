@@ -118,6 +118,19 @@ func (v *IntentCustomValidator) validatePermissions(ctx context.Context, obj *ag
 	rules = append(rules, obj.Spec.Policy.Required...)
 
 	for _, rule := range rules {
+		if len(rule.NonResourceURLs) > 0 {
+			return fmt.Errorf("nonResourceURLs are not supported in Intents (Intent permissions are namespace-scoped)")
+		}
+		if len(rule.Verbs) == 0 {
+			return fmt.Errorf("policy rules must specify at least one verb")
+		}
+		if len(rule.APIGroups) == 0 {
+			return fmt.Errorf("policy rules must specify at least one apiGroup (use \"\" for core group)")
+		}
+		if len(rule.Resources) == 0 {
+			return fmt.Errorf("policy rules must specify at least one resource")
+		}
+
 		for _, verb := range rule.Verbs {
 			for _, apiGroup := range rule.APIGroups {
 				for _, resource := range rule.Resources {

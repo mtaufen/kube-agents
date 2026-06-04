@@ -621,6 +621,50 @@ spec:
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 		})
+
+		It("should perform structural validation on rules", func() {
+			By("rejecting Intents with empty verbs")
+			emptyVerbs := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: empty-verbs
+  namespace: intent-controller-system
+spec:
+  prompt: "do something"
+  policy:
+    limits:
+    - apiGroups: [""]
+      resources: ["pods"]
+`
+			cmd := exec.Command("kubectl", "create", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(emptyVerbs)
+			output, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred())
+			// Depending on K8s version, it may be rejected by OpenAPI schema validation ("Required value") 
+			// or by our webhook ("must specify at least one verb")
+			Expect(output).To(Or(ContainSubstring("must specify at least one verb"), ContainSubstring("Required value")))
+
+			By("rejecting Intents with nonResourceURLs")
+			nonResource := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: non-resource
+  namespace: intent-controller-system
+spec:
+  prompt: "read healthz"
+  policy:
+    limits:
+    - nonResourceURLs: ["/healthz"]
+      verbs: ["get"]
+`
+			cmd = exec.Command("kubectl", "create", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(nonResource)
+			output, err = utils.Run(cmd)
+			Expect(err).To(HaveOccurred())
+			Expect(output).To(ContainSubstring("nonResourceURLs are not supported"))
+		})
 	})
 })
 
