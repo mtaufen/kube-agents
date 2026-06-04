@@ -20,7 +20,11 @@ import (
 	"context"
 	"fmt"
 
+	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -34,7 +38,7 @@ var intentlog = logf.Log.WithName("intent-resource")
 // SetupIntentWebhookWithManager registers the webhook for Intent in the manager.
 func SetupIntentWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &agentsv1alpha1.Intent{}).
-		WithValidator(&IntentCustomValidator{}).
+		WithValidator(&IntentCustomValidator{Client: mgr.GetClient()}).
 		WithDefaulter(&IntentCustomDefaulter{}).
 		Complete()
 }
@@ -79,21 +83,33 @@ func (d *IntentCustomDefaulter) Default(ctx context.Context, obj *agentsv1alpha1
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type IntentCustomValidator struct {
-	// TODO(user): Add more fields as needed for validation
+	Client client.Client
 }
 
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type Intent.
 func (v *IntentCustomValidator) ValidateCreate(ctx context.Context, obj *agentsv1alpha1.Intent) (admission.Warnings, error) {
 	intentlog.Info("Validation for Intent upon creation", "name", obj.GetName())
 
-	return validateUserInfo(ctx, obj)
+	if _, err := validateUserInfo(ctx, obj); err != nil {
+		return nil, err
+	}
+	if err := v.validatePermissions(ctx, obj); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Intent.
 func (v *IntentCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *agentsv1alpha1.Intent) (admission.Warnings, error) {
 	intentlog.Info("Validation for Intent upon update", "name", newObj.GetName())
 
-	return validateUserInfo(ctx, newObj)
+	if _, err := validateUserInfo(ctx, newObj); err != nil {
+		return nil, err
+	}
+	if err := v.validatePermissions(ctx, newObj); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func validateUserInfo(ctx context.Context, obj *agentsv1alpha1.Intent) (admission.Warnings, error) {
@@ -116,4 +132,67 @@ func (v *IntentCustomValidator) ValidateDelete(_ context.Context, obj *agentsv1a
 	// TODO(user): fill in your validation logic upon object deletion.
 
 	return nil, nil
+}
+
+func (v *IntentCustomValidator) validatePermissions(ctx context.Context, obj *agentsv1alpha1.Intent) error {
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil {
+		return nil // No admission context, skipping validation (e.g. testing)
+	}
+
+	// Check both Limits and Required
+	rules := append([]rbacv1.PolicyRule{}, obj.Spec.Policy.Limits...)
+	rules = append(rules, obj.Spec.Policy.Required...)
+
+	for _, rule := range rules {
+		for _, verb := range rule.Verbs {
+			for _, apiGroup := range rule.APIGroups {
+				for _, resource := range rule.Resources {
+					if len(rule.ResourceNames) > 0 {
+						for _, resName := range rule.ResourceNames {
+							if err := checkSAR(ctx, v.Client, req.UserInfo, obj.Namespace, verb, apiGroup, resource, resName); err != nil {
+								return err
+							}
+						}
+					} else {
+						if err := checkSAR(ctx, v.Client, req.UserInfo, obj.Namespace, verb, apiGroup, resource, ""); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func checkSAR(ctx context.Context, k8sClient client.Client, userInfo authenticationv1.UserInfo, namespace, verb, group, resource, name string) error {
+	sar := &authorizationv1.SubjectAccessReview{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			User:   userInfo.Username,
+			Groups: userInfo.Groups,
+			UID:    userInfo.UID,
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Verb:      verb,
+				Group:     group,
+				Resource:  resource,
+				Name:      name,
+				Namespace: namespace, // Check permissions within the Intent's namespace
+			},
+		},
+	}
+	if len(userInfo.Extra) > 0 {
+		sar.Spec.Extra = make(map[string]authorizationv1.ExtraValue)
+		for k, v := range userInfo.Extra {
+			sar.Spec.Extra[k] = authorizationv1.ExtraValue(v)
+		}
+	}
+
+	if err := k8sClient.Create(ctx, sar); err != nil {
+		return fmt.Errorf("failed to create SubjectAccessReview: %w", err)
+	}
+	if !sar.Status.Allowed {
+		return fmt.Errorf("user %q does not have permission to %s %s.%s %s in namespace %q", userInfo.Username, verb, resource, group, name, namespace)
+	}
+	return nil
 }

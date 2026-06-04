@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -38,14 +37,6 @@ func TestHandleList(t *testing.T) {
 	// Or we can just use WithRuntimeObjects and rely on unstructured fallback
 	client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(pod1, pod2).Build()
 
-	limits := []rbacv1.PolicyRule{
-		{
-			Verbs:     []string{"list"},
-			APIGroups: []string{""},
-			Resources: []string{"pods"},
-		},
-	}
-
 	tests := []struct {
 		name        string
 		input       ListInput
@@ -64,35 +55,11 @@ func TestHandleList(t *testing.T) {
 			expectError: false,
 			expectCount: 2,
 		},
-		{
-			name: "list error",
-			input: ListInput{
-				Group:     "invalid",
-				Version:   "v1",
-				Kind:      "PodList",
-				Resource:  "pods", // matched by policy but will fail in client
-				Namespace: "default",
-			},
-			expectError: true,
-			expectCount: 0,
-		},
-		{
-			name: "denied list",
-			input: ListInput{
-				Group:     "apps",
-				Version:   "v1",
-				Kind:      "DeploymentList",
-				Resource:  "deployments",
-				Namespace: "default",
-			},
-			expectError: true,
-			expectCount: 0,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := handleList(context.Background(), client, limits, tt.input)
+			out, err := handleList(context.Background(), client, tt.input)
 			if (err != nil) != tt.expectError {
 				t.Errorf("handleList() error = %v, expectError %v", err, tt.expectError)
 			}
@@ -106,7 +73,7 @@ func TestHandleList(t *testing.T) {
 func TestNewListTool(t *testing.T) {
 	scheme := runtime.NewScheme()
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-	tool, err := NewListTool(client, nil)
+	tool, err := NewListTool(client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

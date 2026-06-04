@@ -2,9 +2,7 @@ package k8s
 
 import (
 	"context"
-	"fmt"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,10 +23,10 @@ type ListOutput struct {
 	Items []map[string]interface{} `json:"items"`
 }
 
-// NewListTool creates an ADK tool for listing Kubernetes resources, subject to the provided limits.
-func NewListTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, error) {
+// NewListTool creates an ADK tool for listing Kubernetes resources.
+func NewListTool(c client.Client) (tool.Tool, error) {
 	handler := func(ctx tool.Context, input ListInput) (ListOutput, error) {
-		return handleList(ctx, c, limits, input)
+		return handleList(ctx, c, input)
 	}
 
 	return functiontool.New(functiontool.Config{
@@ -37,11 +35,7 @@ func NewListTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, error)
 	}, handler)
 }
 
-func handleList(ctx context.Context, c client.Client, limits []rbacv1.PolicyRule, input ListInput) (ListOutput, error) {
-	// Pass an empty string for resourceName since this is a list operation
-	if !IsAllowed(limits, input.Group, input.Resource, "", "list") {
-		return ListOutput{}, fmt.Errorf("permission denied: intent policy does not allow 'list' on %s/%s in namespace '%s'", input.Group, input.Resource, input.Namespace)
-	}
+func handleList(ctx context.Context, c client.Client, input ListInput) (ListOutput, error) {
 
 	uList := &unstructured.UnstructuredList{}
 	uList.SetGroupVersionKind(schema.GroupVersionKind{

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -13,14 +12,6 @@ import (
 func TestHandleApply(t *testing.T) {
 	scheme := runtime.NewScheme()
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-
-	limits := []rbacv1.PolicyRule{
-		{
-			Verbs:     []string{"patch"},
-			APIGroups: []string{""},
-			Resources: []string{"pods"},
-		},
-	}
 
 	tests := []struct {
 		name        string
@@ -43,27 +34,11 @@ func TestHandleApply(t *testing.T) {
 			},
 			expectError: false,
 		},
-		{
-			name: "denied action",
-			input: ApplyInput{
-				Resource: "deployments",
-				Manifest: map[string]interface{}{
-					"apiVersion": "apps/v1",
-					"kind":       "Deployment",
-					"metadata": map[string]interface{}{
-						"name":      "test-dep",
-						"namespace": "default",
-					},
-				},
-			},
-			expectError: true,
-			errContains: "permission denied",
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := handleApply(context.Background(), client, limits, tt.input)
+			_, err := handleApply(context.Background(), client, tt.input)
 			if err != nil {
 				// Fake client does not support Apply patch type, so it may error out after passing auth.
 				// We consider it a pass if it hits the unsupported patch error.
@@ -85,7 +60,7 @@ func TestHandleApply(t *testing.T) {
 func TestNewApplyTool(t *testing.T) {
 	scheme := runtime.NewScheme()
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-	tool, err := NewApplyTool(client, nil)
+	tool, err := NewApplyTool(client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

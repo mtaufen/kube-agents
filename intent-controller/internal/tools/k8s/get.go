@@ -2,9 +2,7 @@ package k8s
 
 import (
 	"context"
-	"fmt"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,10 +28,10 @@ type GetOutput struct {
 	Object map[string]interface{} `json:"object,omitempty"`
 }
 
-// NewGetTool creates an ADK tool for getting a Kubernetes resource, subject to the provided limits.
-func NewGetTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, error) {
+// NewGetTool creates an ADK tool for getting a Kubernetes resource.
+func NewGetTool(c client.Client) (tool.Tool, error) {
 	handler := func(ctx tool.Context, input GetInput) (GetOutput, error) {
-		return handleGet(ctx, c, limits, input)
+		return handleGet(ctx, c, input)
 	}
 
 	return functiontool.New(functiontool.Config{
@@ -42,10 +40,7 @@ func NewGetTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, error) 
 	}, handler)
 }
 
-func handleGet(ctx context.Context, c client.Client, limits []rbacv1.PolicyRule, input GetInput) (GetOutput, error) {
-	if !IsAllowed(limits, input.Ref.Group, input.Ref.Resource, input.Ref.Name, "get") {
-		return GetOutput{}, fmt.Errorf("permission denied: intent policy does not allow 'get' on %s/%s/%s in namespace %s", input.Ref.Group, input.Ref.Resource, input.Ref.Name, input.Ref.Namespace)
-	}
+func handleGet(ctx context.Context, c client.Client, input GetInput) (GetOutput, error) {
 
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{

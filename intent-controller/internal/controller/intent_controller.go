@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -48,11 +49,13 @@ import (
 type IntentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	Config *rest.Config
 }
 
 // +kubebuilder:rbac:groups=agents.gke.io,resources=intents,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agents.gke.io,resources=intents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agents.gke.io,resources=intents/finalizers,verbs=update
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete;bind;escalate
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -109,35 +112,93 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// Fallback to limits if compilation fails
 			adaptivePolicyRules = intent.Spec.Policy.Limits
 		} else {
-			if err := verifyPolicy(ctx, r.Client, intent.Spec.UserInfo, intent.Namespace, compiledRules, intent.Spec.Policy.Required, intent.Spec.Policy.Limits); err != nil {
-				logger.Error(err, "Adaptive policy verification failed, falling back to limits")
-				adaptivePolicyRules = intent.Spec.Policy.Limits
-			} else {
-				// Verification passed, update Status to reflect the active policy and hash
-				adaptivePolicyRules = compiledRules
-				intent.Status.AdaptivePolicy.Limits = adaptivePolicyRules
-				intent.Status.PolicyHash = currentHash
-			}
+			// Verification is handled entirely by the Admission Webhook at creation time.
+			// We can fully trust the AdaptivePolicy.
+			adaptivePolicyRules = compiledRules
+			intent.Status.AdaptivePolicy.Limits = adaptivePolicyRules
+			intent.Status.PolicyHash = currentHash
 		}
 	}
 
-	// Instantiate the k8s tools bounded by the AdaptivePolicy
-	getTool, err := k8stools.NewGetTool(r.Client, adaptivePolicyRules)
+	ghostURN := fmt.Sprintf("kube-agents:intent:%s:%s", intent.Namespace, intent.Name)
+	roleName := fmt.Sprintf("intent-agent-%s", intent.Name)
+
+	role := &rbacv1.Role{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "rbac.authorization.k8s.io/v1",
+			Kind:       "Role",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      roleName,
+			Namespace: intent.Namespace,
+		},
+		Rules: adaptivePolicyRules,
+	}
+	if err := ctrl.SetControllerReference(&intent, role, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Patch(ctx, role, client.Apply, client.ForceOwnership, client.FieldOwner("intent-controller")); err != nil {
+		logger.Error(err, "Failed to apply Role for Ghost User")
+		return ctrl.Result{}, err
+	}
+
+	roleBinding := &rbacv1.RoleBinding{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "rbac.authorization.k8s.io/v1",
+			Kind:       "RoleBinding",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      roleName,
+			Namespace: intent.Namespace,
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     roleName,
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				APIGroup: "rbac.authorization.k8s.io",
+				Kind:     "User",
+				Name:     ghostURN,
+			},
+		},
+	}
+	if err := ctrl.SetControllerReference(&intent, roleBinding, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Patch(ctx, roleBinding, client.Apply, client.ForceOwnership, client.FieldOwner("intent-controller")); err != nil {
+		logger.Error(err, "Failed to apply RoleBinding for Ghost User")
+		return ctrl.Result{}, err
+	}
+
+	impersonationConfig := rest.CopyConfig(r.Config)
+	impersonationConfig.Impersonate = rest.ImpersonationConfig{
+		UserName: ghostURN,
+	}
+	impersonatedClient, err := client.New(impersonationConfig, client.Options{Scheme: r.Scheme})
+	if err != nil {
+		logger.Error(err, "Failed to create impersonated client")
+		return ctrl.Result{}, err
+	}
+
+	// Instantiate the k8s tools using the impersonated client
+	getTool, err := k8stools.NewGetTool(impersonatedClient)
 	if err != nil {
 		logger.Error(err, "Failed to create get_resource tool")
 		return ctrl.Result{}, err
 	}
-	listTool, err := k8stools.NewListTool(r.Client, adaptivePolicyRules)
+	listTool, err := k8stools.NewListTool(impersonatedClient)
 	if err != nil {
 		logger.Error(err, "Failed to create list_resources tool")
 		return ctrl.Result{}, err
 	}
-	applyTool, err := k8stools.NewApplyTool(r.Client, adaptivePolicyRules)
+	applyTool, err := k8stools.NewApplyTool(impersonatedClient)
 	if err != nil {
 		logger.Error(err, "Failed to create apply_resource tool")
 		return ctrl.Result{}, err
 	}
-	deleteTool, err := k8stools.NewDeleteTool(r.Client, adaptivePolicyRules)
+	deleteTool, err := k8stools.NewDeleteTool(impersonatedClient)
 	if err != nil {
 		logger.Error(err, "Failed to create delete_resource tool")
 		return ctrl.Result{}, err

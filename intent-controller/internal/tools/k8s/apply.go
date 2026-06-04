@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -21,10 +20,10 @@ type ApplyOutput struct {
 	Message string `json:"message"`
 }
 
-// NewApplyTool creates an ADK tool for applying a Kubernetes resource, subject to the provided limits.
-func NewApplyTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, error) {
+// NewApplyTool creates an ADK tool for applying a Kubernetes resource.
+func NewApplyTool(c client.Client) (tool.Tool, error) {
 	handler := func(ctx tool.Context, input ApplyInput) (ApplyOutput, error) {
-		return handleApply(ctx, c, limits, input)
+		return handleApply(ctx, c, input)
 	}
 
 	return functiontool.New(functiontool.Config{
@@ -33,17 +32,12 @@ func NewApplyTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, error
 	}, handler)
 }
 
-func handleApply(ctx context.Context, c client.Client, limits []rbacv1.PolicyRule, input ApplyInput) (ApplyOutput, error) {
+func handleApply(ctx context.Context, c client.Client, input ApplyInput) (ApplyOutput, error) {
 	u := &unstructured.Unstructured{Object: input.Manifest}
 	gvk := u.GroupVersionKind()
 
-	group := gvk.Group
 	name := u.GetName()
 	namespace := u.GetNamespace()
-
-	if !IsAllowed(limits, group, input.Resource, name, "patch") && !IsAllowed(limits, group, input.Resource, name, "update") && !IsAllowed(limits, group, input.Resource, name, "create") {
-		return ApplyOutput{}, fmt.Errorf("permission denied: intent policy does not allow apply (needs patch/update/create) on %s/%s/%s in namespace %s", group, input.Resource, name, namespace)
-	}
 
 	// Use Server-Side Apply
 	opts := []client.PatchOption{

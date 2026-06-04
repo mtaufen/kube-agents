@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -24,14 +23,6 @@ func TestHandleDelete(t *testing.T) {
 		},
 	}
 	client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(existingObj).Build()
-
-	limits := []rbacv1.PolicyRule{
-		{
-			Verbs:     []string{"delete"},
-			APIGroups: []string{""},
-			Resources: []string{"pods"},
-		},
-	}
 
 	tests := []struct {
 		name        string
@@ -66,25 +57,11 @@ func TestHandleDelete(t *testing.T) {
 			},
 			expectError: true,
 		},
-		{
-			name: "denied action",
-			input: DeleteInput{
-				Ref: ResourceRef{
-					Group:     "apps",
-					Version:   "v1",
-					Kind:      "Deployment",
-					Resource:  "deployments",
-					Namespace: "default",
-					Name:      "test-dep",
-				},
-			},
-			expectError: true,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := handleDelete(context.Background(), client, limits, tt.input)
+			_, err := handleDelete(context.Background(), client, tt.input)
 			if (err != nil) != tt.expectError {
 				t.Errorf("handleDelete() error = %v, expectError %v", err, tt.expectError)
 			}
@@ -95,7 +72,7 @@ func TestHandleDelete(t *testing.T) {
 func TestNewDeleteTool(t *testing.T) {
 	scheme := runtime.NewScheme()
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-	tool, err := NewDeleteTool(client, nil)
+	tool, err := NewDeleteTool(client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

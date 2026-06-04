@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,10 +20,10 @@ type DeleteOutput struct {
 	Message string `json:"message"`
 }
 
-// NewDeleteTool creates an ADK tool for deleting a Kubernetes resource, subject to the provided limits.
-func NewDeleteTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, error) {
+// NewDeleteTool creates an ADK tool for deleting a Kubernetes resource.
+func NewDeleteTool(c client.Client) (tool.Tool, error) {
 	handler := func(ctx tool.Context, input DeleteInput) (DeleteOutput, error) {
-		return handleDelete(ctx, c, limits, input)
+		return handleDelete(ctx, c, input)
 	}
 
 	return functiontool.New(functiontool.Config{
@@ -33,11 +32,7 @@ func NewDeleteTool(c client.Client, limits []rbacv1.PolicyRule) (tool.Tool, erro
 	}, handler)
 }
 
-func handleDelete(ctx context.Context, c client.Client, limits []rbacv1.PolicyRule, input DeleteInput) (DeleteOutput, error) {
-	if !IsAllowed(limits, input.Ref.Group, input.Ref.Resource, input.Ref.Name, "delete") {
-		return DeleteOutput{}, fmt.Errorf("permission denied: intent policy does not allow 'delete' on %s/%s/%s in namespace %s", input.Ref.Group, input.Ref.Resource, input.Ref.Name, input.Ref.Namespace)
-	}
-
+func handleDelete(ctx context.Context, c client.Client, input DeleteInput) (DeleteOutput, error) {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   input.Ref.Group,

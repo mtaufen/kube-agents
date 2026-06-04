@@ -182,6 +182,7 @@ func main() {
 	if err := (&controller.IntentReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Config: mgr.GetConfig(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "intent")
 		os.Exit(1)

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -65,14 +64,6 @@ func TestMain(m *testing.M) {
 func TestEnvtestApply(t *testing.T) {
 	ctx := context.Background()
 
-	limits := []rbacv1.PolicyRule{
-		{
-			Verbs:     []string{"*"},
-			APIGroups: []string{""},
-			Resources: []string{"configmaps"},
-		},
-	}
-
 	input := ApplyInput{
 		Resource: "configmaps",
 		Manifest: map[string]interface{}{
@@ -88,8 +79,7 @@ func TestEnvtestApply(t *testing.T) {
 		},
 	}
 
-	// Run apply against real envtest API server
-	out, err := handleApply(ctx, k8sClient, limits, input)
+	out, err := handleApply(ctx, k8sClient, input)
 	if err != nil {
 		t.Fatalf("handleApply failed: %v", err)
 	}
