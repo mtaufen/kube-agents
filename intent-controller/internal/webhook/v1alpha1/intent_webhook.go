@@ -39,28 +39,10 @@ var intentlog = logf.Log.WithName("intent-resource")
 func SetupIntentWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &agentsv1alpha1.Intent{}).
 		WithValidator(&IntentCustomValidator{Client: mgr.GetClient()}).
-		WithDefaulter(&IntentCustomDefaulter{}).
 		Complete()
 }
 
 // TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-
-// +kubebuilder:webhook:path=/mutate-agents-gke-io-v1alpha1-intent,mutating=true,failurePolicy=fail,sideEffects=None,groups=agents.gke.io,resources=intents,verbs=create;update,versions=v1alpha1,name=mintent-v1alpha1.kb.io,admissionReviewVersions=v1
-
-// IntentCustomDefaulter struct is responsible for setting default values on the custom resource of the
-// Kind Intent when those are created or updated.
-//
-// NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
-// as it is used only for temporary operations and does not need to be deeply copied.
-type IntentCustomDefaulter struct {
-	// TODO(user): Add more fields as needed for defaulting
-}
-
-// Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Intent.
-func (d *IntentCustomDefaulter) Default(ctx context.Context, obj *agentsv1alpha1.Intent) error {
-	intentlog.Info("Defaulting for Intent", "name", obj.GetName())
-	return nil
-}
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
 // NOTE: If you want to customise the 'path', use the flags '--defaulting-path' or '--validation-path'.
