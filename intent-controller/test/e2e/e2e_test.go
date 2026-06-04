@@ -441,6 +441,186 @@ spec:
 			_, err = utils.Run(cmd)
 			Expect(err).To(HaveOccurred(), "The restricted-intent should not exist")
 		})
+
+		It("should prevent privilege escalation via Intent update", func() {
+			By("creating a valid Intent requesting intents access (should succeed)")
+			// The restricted-user already has permission to create/update intents from the previous test
+			validIntent := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: update-intent
+  namespace: intent-controller-system
+spec:
+  prompt: "Read intents"
+  policy:
+    limits:
+    - apiGroups: ["agents.gke.io"]
+      resources: ["intents"]
+      verbs: ["get"]
+`
+			cmd := exec.Command("kubectl", "create", "--as=system:serviceaccount:intent-controller-system:restricted-user", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(validIntent)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Restricted user should be allowed to create an Intent asking for intent access")
+
+			By("attempting to update the Intent to request deployments access (should fail)")
+			invalidUpdate := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: update-intent
+  namespace: intent-controller-system
+spec:
+  prompt: "Create deployments"
+  policy:
+    limits:
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["create"]
+`
+			cmd = exec.Command("kubectl", "apply", "--as=system:serviceaccount:intent-controller-system:restricted-user", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(invalidUpdate)
+			output, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "Restricted user should NOT be allowed to update the Intent to escalate privileges")
+			Expect(output).To(ContainSubstring("denied the request"), "Webhook should reject escalation on update")
+		})
+
+		It("should evaluate Required array correctly", func() {
+			By("attempting to create an Intent with unauthorized permissions in Required array (should fail)")
+			invalidIntent := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: required-intent
+  namespace: intent-controller-system
+spec:
+  prompt: "Create an nginx deployment"
+  policy:
+    required:
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["create"]
+`
+			cmd := exec.Command("kubectl", "create", "--as=system:serviceaccount:intent-controller-system:restricted-user", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(invalidIntent)
+			output, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "Restricted user should NOT be allowed to request unauthorized Required permissions")
+			Expect(output).To(ContainSubstring("denied the request"))
+		})
+
+		It("should prevent subresource exploitation", func() {
+			By("attempting to create an Intent requesting pods/exec (should fail)")
+			// Ensure user does not have pods/exec permissions
+			invalidIntent := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: subresource-intent
+  namespace: intent-controller-system
+spec:
+  prompt: "Exec into a pod"
+  policy:
+    limits:
+    - apiGroups: [""]
+      resources: ["pods/exec"]
+      verbs: ["create"]
+`
+			cmd := exec.Command("kubectl", "create", "--as=system:serviceaccount:intent-controller-system:restricted-user", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(invalidIntent)
+			output, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "User without pods/exec permissions should be denied")
+			Expect(output).To(ContainSubstring("denied the request"))
+			Expect(output).To(ContainSubstring("pods/exec"), "Webhook should correctly format subresource denial string")
+		})
+
+		It("should enforce strict ResourceNames validation", func() {
+			By("creating a user with restricted ResourceNames access")
+			role := `
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resnames-user-role
+  namespace: intent-controller-system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["safe-config"]
+  verbs: ["update"]
+- apiGroups: ["agents.gke.io"]
+  resources: ["intents"]
+  verbs: ["create"]
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(role)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			cmd = exec.Command("kubectl", "create", "sa", "resnames-user", "-n", namespace)
+			_, _ = utils.Run(cmd)
+
+			roleBinding := `
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resnames-user-rolebinding
+  namespace: intent-controller-system
+subjects:
+- kind: ServiceAccount
+  name: resnames-user
+  namespace: intent-controller-system
+roleRef:
+  kind: Role
+  name: resnames-user-role
+  apiGroup: rbac.authorization.k8s.io
+`
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(roleBinding)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("attempting to create an Intent asking for all ConfigMaps (should fail)")
+			invalidIntentAll := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: configmap-intent
+  namespace: intent-controller-system
+spec:
+  prompt: "Update all configmaps"
+  policy:
+    limits:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["update"]
+`
+			cmd = exec.Command("kubectl", "create", "--as=system:serviceaccount:intent-controller-system:resnames-user", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(invalidIntentAll)
+			output, err := utils.Run(cmd)
+			Expect(err).To(HaveOccurred())
+			Expect(output).To(ContainSubstring("denied the request"))
+
+			By("attempting to create an Intent asking for a specific safe ConfigMap (should succeed)")
+			validIntentNamed := `
+apiVersion: agents.gke.io/v1alpha1
+kind: Intent
+metadata:
+  name: configmap-intent-safe
+  namespace: intent-controller-system
+spec:
+  prompt: "Update the safe configmap"
+  policy:
+    limits:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      resourceNames: ["safe-config"]
+      verbs: ["update"]
+`
+			cmd = exec.Command("kubectl", "create", "--as=system:serviceaccount:intent-controller-system:resnames-user", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(validIntentNamed)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 })
 

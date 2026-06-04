@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	"strings"
 
 	agentsv1alpha1 "kube-agents/intent-controller/api/v1alpha1"
 )
@@ -120,14 +121,20 @@ func (v *IntentCustomValidator) validatePermissions(ctx context.Context, obj *ag
 		for _, verb := range rule.Verbs {
 			for _, apiGroup := range rule.APIGroups {
 				for _, resource := range rule.Resources {
+					baseResource := resource
+					subResource := ""
+					if parts := strings.SplitN(resource, "/", 2); len(parts) == 2 {
+						baseResource = parts[0]
+						subResource = parts[1]
+					}
 					if len(rule.ResourceNames) > 0 {
 						for _, resName := range rule.ResourceNames {
-							if err := checkSAR(ctx, v.Client, req.UserInfo, obj.Namespace, verb, apiGroup, resource, resName); err != nil {
+							if err := checkSAR(ctx, v.Client, req.UserInfo, obj.Namespace, verb, apiGroup, baseResource, subResource, resName); err != nil {
 								return err
 							}
 						}
 					} else {
-						if err := checkSAR(ctx, v.Client, req.UserInfo, obj.Namespace, verb, apiGroup, resource, ""); err != nil {
+						if err := checkSAR(ctx, v.Client, req.UserInfo, obj.Namespace, verb, apiGroup, baseResource, subResource, ""); err != nil {
 							return err
 						}
 					}
@@ -138,18 +145,19 @@ func (v *IntentCustomValidator) validatePermissions(ctx context.Context, obj *ag
 	return nil
 }
 
-func checkSAR(ctx context.Context, k8sClient client.Client, userInfo authenticationv1.UserInfo, namespace, verb, group, resource, name string) error {
+func checkSAR(ctx context.Context, k8sClient client.Client, userInfo authenticationv1.UserInfo, namespace, verb, group, resource, subresource, name string) error {
 	sar := &authorizationv1.SubjectAccessReview{
 		Spec: authorizationv1.SubjectAccessReviewSpec{
 			User:   userInfo.Username,
 			Groups: userInfo.Groups,
 			UID:    userInfo.UID,
 			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Verb:      verb,
-				Group:     group,
-				Resource:  resource,
-				Name:      name,
-				Namespace: namespace, // Check permissions within the Intent's namespace
+				Verb:        verb,
+				Group:       group,
+				Resource:    resource,
+				Subresource: subresource,
+				Name:        name,
+				Namespace:   namespace, // Check permissions within the Intent's namespace
 			},
 		},
 	}
@@ -164,7 +172,11 @@ func checkSAR(ctx context.Context, k8sClient client.Client, userInfo authenticat
 		return fmt.Errorf("failed to create SubjectAccessReview: %w", err)
 	}
 	if !sar.Status.Allowed {
-		return fmt.Errorf("user %q does not have permission to %s %s.%s %s in namespace %q", userInfo.Username, verb, resource, group, name, namespace)
+		resStr := resource
+		if subresource != "" {
+			resStr = resource + "/" + subresource
+		}
+		return fmt.Errorf("user %q does not have permission to %s %s.%s %s in namespace %q", userInfo.Username, verb, resStr, group, name, namespace)
 	}
 	return nil
 }
