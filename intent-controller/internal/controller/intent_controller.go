@@ -77,15 +77,16 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	logger.Info("Reconciling Intent", "name", intent.Name, "prompt", intent.Spec.Prompt)
 
-	// TODO(Phase 2): Compile AdaptivePolicy using an LLM based on intent.Spec.Prompt.
-	// For Phase 1, we will just use intent.Spec.Policy.Limits directly in our tools.
-
 	// Setup model (e.g., Gemini) for the agent.
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
-	model, err := gemini.NewModel(ctx, "gemini-3.1-flash-lite", &genai.ClientConfig{
+	modelName := intent.Spec.Model
+	if modelName == "" {
+		modelName = "gemini-3.1-flash-lite"
+	}
+	model, err := gemini.NewModel(ctx, modelName, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
 	if err != nil {
@@ -93,28 +94,40 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// TODO(user): We currently provide specific tools (get, list, apply, delete) to improve
-	// LLM function-calling reliability via strict JSON schemas. Consider adding or migrating to a generic
-	// `call_kubernetes_api` tool if we need the LLM to access subresources (like /scale),
-	// logs, or arbitrary endpoints, trading strict schemas for maximum flexibility.
+	// Phase 2: Compile AdaptivePolicy using an LLM based on intent.Spec.Prompt.
+	adaptivePolicyRules, err := compileAdaptivePolicy(ctx, apiKey, modelName, intent.Spec.Prompt, intent.Spec.Policy.Required, intent.Spec.Policy.Limits)
+	if err != nil {
+		logger.Error(err, "Failed to compile adaptive policy, falling back to limits")
+		// Fallback to limits if compilation fails, or we could fail entirely. We'll fallback to limits for safety.
+		adaptivePolicyRules = intent.Spec.Policy.Limits
+	} else {
+		if err := verifyPolicy(adaptivePolicyRules, intent.Spec.Policy.Required, intent.Spec.Policy.Limits); err != nil {
+			logger.Error(err, "Adaptive policy verification failed, falling back to limits")
+			adaptivePolicyRules = intent.Spec.Policy.Limits
+		} else {
+			// Verification passed, update Status to reflect the active policy
+			intent.Status.AdaptivePolicy.Limits = adaptivePolicyRules
+			// Note: Status updates to intent happen later down in the file
+		}
+	}
 
-	// Instantiate the k8s tools bounded by the static Intent Policy Limits
-	getTool, err := k8stools.NewGetTool(r.Client, intent.Spec.Policy.Limits)
+	// Instantiate the k8s tools bounded by the AdaptivePolicy
+	getTool, err := k8stools.NewGetTool(r.Client, adaptivePolicyRules)
 	if err != nil {
 		logger.Error(err, "Failed to create get_resource tool")
 		return ctrl.Result{}, err
 	}
-	listTool, err := k8stools.NewListTool(r.Client, intent.Spec.Policy.Limits)
+	listTool, err := k8stools.NewListTool(r.Client, adaptivePolicyRules)
 	if err != nil {
 		logger.Error(err, "Failed to create list_resources tool")
 		return ctrl.Result{}, err
 	}
-	applyTool, err := k8stools.NewApplyTool(r.Client, intent.Spec.Policy.Limits)
+	applyTool, err := k8stools.NewApplyTool(r.Client, adaptivePolicyRules)
 	if err != nil {
 		logger.Error(err, "Failed to create apply_resource tool")
 		return ctrl.Result{}, err
 	}
-	deleteTool, err := k8stools.NewDeleteTool(r.Client, intent.Spec.Policy.Limits)
+	deleteTool, err := k8stools.NewDeleteTool(r.Client, adaptivePolicyRules)
 	if err != nil {
 		logger.Error(err, "Failed to create delete_resource tool")
 		return ctrl.Result{}, err

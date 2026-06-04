@@ -43,6 +43,11 @@ type IntentSpec struct {
 	// Prompt contains the human-authored intent.
 	Prompt string `json:"prompt"`
 
+	// Model specifies the LLM to use (e.g., gemini-3.1-flash-lite).
+	// Defaults to gemini-3.1-flash-lite if not specified.
+	// +optional
+	Model string `json:"model,omitempty"`
+
 	// Policy defines the permission bounds for the agent.
 	// +optional
 	Policy IntentPolicy `json:"policy,omitempty"`

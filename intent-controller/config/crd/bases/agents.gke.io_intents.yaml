@@ -39,6 +39,11 @@ spec:
           spec:
             description: spec defines the desired state of Intent
             properties:
+              model:
+                description: |-
+                  Model specifies the LLM to use (e.g., gemini-3.1-flash-lite).
+                  Defaults to gemini-3.1-flash-lite if not specified.
+                type: string
               policy:
                 description: Policy defines the permission bounds for the agent.
                 properties:
