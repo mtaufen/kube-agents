@@ -59,17 +59,6 @@ type IntentCustomDefaulter struct {
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Intent.
 func (d *IntentCustomDefaulter) Default(ctx context.Context, obj *agentsv1alpha1.Intent) error {
 	intentlog.Info("Defaulting for Intent", "name", obj.GetName())
-
-	req, err := admission.RequestFromContext(ctx)
-	if err != nil {
-		intentlog.Error(err, "Failed to get admission request from context")
-		return nil // Return nil so we don't block operations without an admission context (e.g. envtest)
-	}
-
-	// Immutably set UserInfo to the actual user making the request.
-	// This prevents privilege escalation by spoofing the user identity.
-	obj.Spec.UserInfo = req.UserInfo
-
 	return nil
 }
 
@@ -92,9 +81,6 @@ type IntentCustomValidator struct {
 func (v *IntentCustomValidator) ValidateCreate(ctx context.Context, obj *agentsv1alpha1.Intent) (admission.Warnings, error) {
 	intentlog.Info("Validation for Intent upon creation", "name", obj.GetName())
 
-	if _, err := validateUserInfo(ctx, obj); err != nil {
-		return nil, err
-	}
 	if err := v.validatePermissions(ctx, obj); err != nil {
 		return nil, err
 	}
@@ -105,24 +91,8 @@ func (v *IntentCustomValidator) ValidateCreate(ctx context.Context, obj *agentsv
 func (v *IntentCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *agentsv1alpha1.Intent) (admission.Warnings, error) {
 	intentlog.Info("Validation for Intent upon update", "name", newObj.GetName())
 
-	if _, err := validateUserInfo(ctx, newObj); err != nil {
-		return nil, err
-	}
 	if err := v.validatePermissions(ctx, newObj); err != nil {
 		return nil, err
-	}
-	return nil, nil
-}
-
-func validateUserInfo(ctx context.Context, obj *agentsv1alpha1.Intent) (admission.Warnings, error) {
-	req, err := admission.RequestFromContext(ctx)
-	if err != nil {
-		return nil, nil // No admission context, skipping validation (e.g. testing)
-	}
-
-	// Defensive check: Ensure UserInfo was not spoofed or bypassed somehow
-	if obj.Spec.UserInfo.Username != req.UserInfo.Username {
-		return nil, fmt.Errorf("user info spoofing detected: requested username %q does not match actual username %q", obj.Spec.UserInfo.Username, req.UserInfo.Username)
 	}
 	return nil, nil
 }

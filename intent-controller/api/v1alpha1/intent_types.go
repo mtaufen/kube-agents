@@ -17,7 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,10 +50,6 @@ type IntentSpec struct {
 	// Policy defines the permission bounds for the agent.
 	// +optional
 	Policy IntentPolicy `json:"policy,omitempty"`
-
-	// UserInfo contains information about the user who created the Intent.
-	// +optional
-	UserInfo authenticationv1.UserInfo `json:"userInfo,omitempty"`
 }
 
 // IntentStatus defines the observed state of Intent.
