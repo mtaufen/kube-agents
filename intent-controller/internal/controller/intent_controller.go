@@ -78,7 +78,7 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// LLM function-calling reliability via strict JSON schemas. Consider adding or migrating to a generic
 	// `call_kubernetes_api` tool if we need the LLM to access subresources (like /scale),
 	// logs, or arbitrary endpoints, trading strict schemas for maximum flexibility.
-	
+
 	// Instantiate the k8s tools bounded by the static Intent Policy Limits
 	getTool, err := k8stools.NewGetTool(r.Client, intent.Spec.Policy.Limits)
 	if err != nil {
@@ -117,11 +117,11 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// Requeue if a referenced skill ConfigMap is missing
 			return ctrl.Result{}, err
 		}
-		
+
 		// Attempt to extract frontmatter from SKILL.md or fallback to configmap name
 		name := skillRef.Name
 		desc := "Use load_skill to view."
-		
+
 		for _, val := range cm.Data {
 			if n, d := parseFrontmatter(val); n != "" {
 				name = n
