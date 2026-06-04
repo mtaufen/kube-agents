@@ -82,6 +82,8 @@ func (d *IntentCustomDefaulter) Default(ctx context.Context, obj *agentsv1alpha1
 //
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
+//
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 type IntentCustomValidator struct {
 	Client client.Client
 }
