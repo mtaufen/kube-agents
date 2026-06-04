@@ -101,7 +101,7 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// Fallback to limits if compilation fails, or we could fail entirely. We'll fallback to limits for safety.
 		adaptivePolicyRules = intent.Spec.Policy.Limits
 	} else {
-		if err := verifyPolicy(adaptivePolicyRules, intent.Spec.Policy.Required, intent.Spec.Policy.Limits); err != nil {
+		if err := verifyPolicy(ctx, r.Client, intent.Spec.UserInfo, intent.Namespace, adaptivePolicyRules, intent.Spec.Policy.Required, intent.Spec.Policy.Limits); err != nil {
 			logger.Error(err, "Adaptive policy verification failed, falling back to limits")
 			adaptivePolicyRules = intent.Spec.Policy.Limits
 		} else {

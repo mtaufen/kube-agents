@@ -7,7 +7,10 @@ import (
 	"strings"
 
 	"google.golang.org/genai"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	k8stools "kube-agents/intent-controller/internal/tools/k8s"
 )
@@ -81,12 +84,66 @@ Example:
 }
 
 // verifyPolicy locally validates that the generated policy is a subset of limits and a superset of required.
-func verifyPolicy(generated, required, limits []rbacv1.PolicyRule) error {
+// It also issues SubjectAccessReviews to ensure the user making the request actually holds these permissions.
+func verifyPolicy(ctx context.Context, k8sClient client.Client, userInfo authenticationv1.UserInfo, namespace string, generated, required, limits []rbacv1.PolicyRule) error {
 	if !covers(limits, generated) {
 		return fmt.Errorf("generated policy exceeds limits")
 	}
 	if !covers(generated, required) {
 		return fmt.Errorf("generated policy does not cover all required rules")
+	}
+
+	// SubjectAccessReview verification
+	for _, rule := range generated {
+		for _, verb := range rule.Verbs {
+			for _, apiGroup := range rule.APIGroups {
+				for _, resource := range rule.Resources {
+					if len(rule.ResourceNames) > 0 {
+						for _, resName := range rule.ResourceNames {
+							if err := checkSAR(ctx, k8sClient, userInfo, namespace, verb, apiGroup, resource, resName); err != nil {
+								return err
+							}
+						}
+					} else {
+						if err := checkSAR(ctx, k8sClient, userInfo, namespace, verb, apiGroup, resource, ""); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func checkSAR(ctx context.Context, k8sClient client.Client, userInfo authenticationv1.UserInfo, namespace, verb, group, resource, name string) error {
+	sar := &authorizationv1.SubjectAccessReview{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			User:   userInfo.Username,
+			Groups: userInfo.Groups,
+			UID:    userInfo.UID,
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Verb:      verb,
+				Group:     group,
+				Resource:  resource,
+				Name:      name,
+				Namespace: namespace, // Check permissions within the Intent's namespace
+			},
+		},
+	}
+	if len(userInfo.Extra) > 0 {
+		sar.Spec.Extra = make(map[string]authorizationv1.ExtraValue)
+		for k, v := range userInfo.Extra {
+			sar.Spec.Extra[k] = authorizationv1.ExtraValue(v)
+		}
+	}
+
+	if err := k8sClient.Create(ctx, sar); err != nil {
+		return fmt.Errorf("failed to create SubjectAccessReview: %w", err)
+	}
+	if !sar.Status.Allowed {
+		return fmt.Errorf("user %q does not have permission to %s %s.%s %s in namespace %q", userInfo.Username, verb, resource, group, name, namespace)
 	}
 	return nil
 }
