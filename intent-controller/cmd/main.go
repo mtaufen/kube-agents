@@ -37,6 +37,7 @@ import (
 
 	agentsv1alpha1 "kube-agents/intent-controller/api/v1alpha1"
 	"kube-agents/intent-controller/internal/controller"
+	webhookv1alpha1 "kube-agents/intent-controller/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -184,6 +185,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "intent")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupIntentWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "Intent")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
