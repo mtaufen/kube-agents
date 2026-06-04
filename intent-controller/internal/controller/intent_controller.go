@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -315,10 +316,12 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// We return a small RequeueAfter to allow the agent to continuously poll/manage
-	// the resources, acting as a control loop. (In Phase 4, we'll replace this with
-	// dynamic watches).
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	// We return a RequeueAfter to allow the agent to continuously poll/manage
+	// the resources, acting as a control loop. We use 1 minute with up to
+	// 10 seconds of jitter to avoid thundering herds.
+	jitter := time.Duration(rand.Intn(10)) * time.Second
+	requeueAfter := time.Minute + jitter
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // Answer(AI): `SetupWithManager` runs once at startup, so it's not the right place for per-Intent dynamic watches.
