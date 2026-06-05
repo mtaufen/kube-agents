@@ -27,14 +27,13 @@ func computePolicyHash(prompt string, required, limits []rbacv1.PolicyRule) stri
 }
 
 // compileAdaptivePolicy calls an LLM to generate an AdaptivePolicy (list of PolicyRules)
-// bounded by the required and limits policies.
-func compileAdaptivePolicy(ctx context.Context, apiKey, modelName, prompt string, required, limits []rbacv1.PolicyRule) ([]rbacv1.PolicyRule, error) {
+// bounded by the limits policies.
+func compileAdaptivePolicy(ctx context.Context, apiKey, modelName, prompt string, limits []rbacv1.PolicyRule) ([]rbacv1.PolicyRule, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: apiKey})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create genai client: %w", err)
 	}
 
-	reqJSON, _ := json.MarshalIndent(required, "", "  ")
 	limJSON, _ := json.MarshalIndent(limits, "", "  ")
 
 	systemInstruction := fmt.Sprintf(`You are an expert Kubernetes security architect.
@@ -44,10 +43,7 @@ Given the following user intent:
 Generate the MINIMUM necessary RBAC policy rules required to fulfill this intent.
 
 Constraints:
-1. You MUST include at least the permissions defined in the REQUIRED policy:
-%s
-
-2. You MUST NOT exceed the permissions defined in the LIMITS policy:
+You MUST NOT exceed the permissions defined in the LIMITS policy:
 %s
 
 Respond ONLY with a JSON array of Kubernetes rbac.v1.PolicyRule objects. Do not include markdown formatting or backticks.
@@ -58,7 +54,7 @@ Example:
     "resources": ["pods"],
     "verbs": ["get", "list", "watch"]
   }
-]`, prompt, reqJSON, limJSON)
+]`, prompt, limJSON)
 
 	res, err := client.Models.GenerateContent(ctx, modelName, genai.Text(systemInstruction), &genai.GenerateContentConfig{
 		ResponseMIMEType: "application/json",

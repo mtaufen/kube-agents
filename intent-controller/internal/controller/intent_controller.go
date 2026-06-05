@@ -107,15 +107,16 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		adaptivePolicyRules = intent.Status.AdaptivePolicy.Limits
 	} else {
 		// Phase 2: Compile AdaptivePolicy using an LLM based on intent.Spec.Prompt.
-		compiledRules, err := compileAdaptivePolicy(ctx, apiKey, modelName, intent.Spec.Prompt, intent.Spec.Policy.Required, intent.Spec.Policy.Limits)
+		compiledRules, err := compileAdaptivePolicy(ctx, apiKey, modelName, intent.Spec.Prompt, intent.Spec.Policy.Limits)
 		if err != nil {
 			logger.Error(err, "Failed to compile adaptive policy, falling back to limits")
 			// Fallback to limits if compilation fails
 			adaptivePolicyRules = intent.Spec.Policy.Limits
 		} else {
 			// Verification is handled entirely by the Admission Webhook at creation time.
-			// We can fully trust the AdaptivePolicy.
-			adaptivePolicyRules = compiledRules
+			// We can fully trust the AdaptivePolicy, but we must deterministically guarantee
+			// the Required rules are present.
+			adaptivePolicyRules = append(compiledRules, intent.Spec.Policy.Required...)
 			intent.Status.AdaptivePolicy.Limits = adaptivePolicyRules
 			intent.Status.PolicyHash = currentHash
 		}
