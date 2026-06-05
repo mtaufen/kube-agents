@@ -17,11 +17,8 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # This allows ingress traffic from any namespace with the label webhook: enabled
-    - from:
-      - namespaceSelector:
-          matchLabels:
-            webhook: enabled # Only from namespaces with this label
-      ports:
+    # This allows ingress traffic from any source to port 443, ensuring
+    # the kube-apiserver can reach the webhook from outside the cluster network.
+    - ports:
         - port: 443
           protocol: TCP
