@@ -382,6 +382,20 @@ spec:
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "The admin-intent should exist")
 
+			By("waiting for the AdaptivePolicy to be compiled by the LLM")
+			verifyAdaptivePolicy := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "intent", "admin-intent", "-n", namespace, "-o", "jsonpath={.status.conditions}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(MatchRegexp(`Agent(Running|Succeeded|Error)`), "Waiting for Agent to process intent")
+			}
+			Eventually(verifyAdaptivePolicy, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("printing the intent status for verification")
+			cmd = exec.Command("kubectl", "get", "intent", "admin-intent", "-n", namespace, "-o", "yaml")
+			adminIntentOutput, _ := utils.Run(cmd)
+			fmt.Println("\n--- INTENT YAML ---\n", adminIntentOutput, "\n-------------------")
+
 			By("creating a restricted ServiceAccount that can only create Intents")
 			cmd = exec.Command("kubectl", "create", "sa", "restricted-user", "-n", namespace)
 			_, err = utils.Run(cmd)

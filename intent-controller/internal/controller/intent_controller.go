@@ -96,6 +96,15 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	})
 	if err != nil {
 		logger.Error(err, "Failed to create gemini model")
+		meta.SetStatusCondition(&intent.Status.Conditions, metav1.Condition{
+			Type:    "Progressing",
+			Status:  metav1.ConditionFalse,
+			Reason:  "AgentError",
+			Message: fmt.Sprintf("Failed to initialize AI model (e.g. missing API key): %v", err),
+		})
+		if updateErr := r.Status().Update(ctx, &intent); updateErr != nil {
+			logger.Error(updateErr, "Failed to update Intent status with model initialization error")
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -265,8 +274,10 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Run the agent
 	rnr, err := runner.New(runner.Config{
-		Agent:          adkAgent,
-		SessionService: session.InMemoryService(),
+		AppName:           "intent-controller",
+		Agent:             adkAgent,
+		SessionService:    session.InMemoryService(),
+		AutoCreateSession: true,
 	})
 	if err != nil {
 		logger.Error(err, "Failed to create runner")
@@ -285,6 +296,7 @@ func (r *IntentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	msg := &genai.Content{
+		Role:  "user",
 		Parts: []*genai.Part{{Text: intent.Spec.Prompt}},
 	}
 	res := rnr.Run(ctx, intent.Namespace, intent.Name, msg, agent.RunConfig{})
