@@ -58,6 +58,15 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
+		if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
+			By("injecting the host GEMINI_API_KEY into the cluster as a secret")
+			cmd = exec.Command("kubectl", "create", "secret", "generic", "intent-controller-llm-secret",
+				"--from-literal=GEMINI_API_KEY="+apiKey,
+				"-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create LLM secret")
+		}
+
 		By("labeling the namespace to enforce the restricted security policy and enable metrics")
 		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
 			"pod-security.kubernetes.io/enforce=restricted", "metrics=enabled")
